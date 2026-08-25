@@ -14,6 +14,21 @@ Record:
 - pause command supported
 - pause command result
 
+### Prototype 0.2 test protocol
+
+1. Install the debug build on a physical Android device.
+2. Open AutoSleep and choose **Enable media access**.
+3. Explicitly enable AutoSleep under Android's Notification Access settings.
+4. Start media playback in one representative application.
+5. Return to AutoSleep and choose **Refresh**.
+6. Record whether the package, playback state, title/artist, and duration are visible.
+7. Change the playing item and verify whether the compatibility log records a metadata or playback transition.
+8. If **Pause advertised** is `yes`, choose **Request pause** and verify the target application actually pauses.
+9. If pause is not advertised or the request fails, record that case as unsupported rather than treating it as a product-wide failure.
+10. Repeat with long-form video, short-form/autoplay video, audio/podcast, streaming, and locally hosted media applications.
+
+The prototype intentionally logs a pause *request* separately from the observed playback-state result. This avoids claiming control when an application exposes a session but ignores or only partially supports external transport commands.
+
 ## E2 — Stationary detection energy cost
 
 Goal: identify the lowest-cost strategy that can distinguish active handling from long-term stationary placement.
