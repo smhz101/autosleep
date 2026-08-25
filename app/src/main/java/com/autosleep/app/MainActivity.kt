@@ -1,6 +1,8 @@
 package com.autosleep.app
 
+import android.content.Intent
 import android.os.Bundle
+import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.Arrangement
@@ -11,6 +13,8 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.MaterialTheme
@@ -27,20 +31,53 @@ import androidx.compose.ui.unit.dp
 import com.autosleep.app.engine.SleepAction
 import com.autosleep.app.engine.SleepConfidenceEngine
 import com.autosleep.app.engine.SleepObservation
+import com.autosleep.app.media.MediaMonitorState
+import com.autosleep.app.media.MediaSessionMonitor
+import com.autosleep.app.media.MediaSessionSnapshot
 
 class MainActivity : ComponentActivity() {
+    private lateinit var mediaSessionMonitor: MediaSessionMonitor
+    private var mediaMonitorState by mutableStateOf(MediaMonitorState())
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        mediaSessionMonitor = MediaSessionMonitor(this) { state ->
+            mediaMonitorState = state
+        }
+
         setContent {
             MaterialTheme {
-                AutoSleepDashboard()
+                AutoSleepDashboard(
+                    mediaState = mediaMonitorState,
+                    onOpenMediaAccess = {
+                        startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
+                    },
+                    onRefreshMedia = mediaSessionMonitor::refresh,
+                    onPauseMedia = mediaSessionMonitor::requestPause,
+                )
             }
         }
+    }
+
+    override fun onStart() {
+        super.onStart()
+        mediaSessionMonitor.start()
+    }
+
+    override fun onStop() {
+        mediaSessionMonitor.stop()
+        super.onStop()
     }
 }
 
 @Composable
-fun AutoSleepDashboard() {
+fun AutoSleepDashboard(
+    mediaState: MediaMonitorState = MediaMonitorState(),
+    onOpenMediaAccess: () -> Unit = {},
+    onRefreshMedia: () -> Unit = {},
+    onPauseMedia: (String) -> Unit = {},
+) {
     val engine = remember { SleepConfidenceEngine() }
     var observation by remember {
         mutableStateOf(
@@ -64,12 +101,13 @@ fun AutoSleepDashboard() {
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
+                .verticalScroll(rememberScrollState())
                 .padding(20.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             Text("AutoSleep", style = MaterialTheme.typography.headlineMedium)
             Text(
-                "Prototype 0.1 · local inference only",
+                "Prototype 0.2 · local inference + media compatibility probe",
                 style = MaterialTheme.typography.bodyMedium,
             )
 
@@ -95,8 +133,6 @@ fun AutoSleepDashboard() {
                     }
                 }
             }
-
-            Spacer(modifier = Modifier.height(4.dp))
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -138,6 +174,100 @@ fun AutoSleepDashboard() {
                     style = MaterialTheme.typography.bodyLarge,
                 )
             }
+
+            Spacer(modifier = Modifier.height(8.dp))
+            MediaCompatibilityPanel(
+                state = mediaState,
+                onOpenAccess = onOpenMediaAccess,
+                onRefresh = onRefreshMedia,
+                onPause = onPauseMedia,
+            )
+        }
+    }
+}
+
+@Composable
+private fun MediaCompatibilityPanel(
+    state: MediaMonitorState,
+    onOpenAccess: () -> Unit,
+    onRefresh: () -> Unit,
+    onPause: (String) -> Unit,
+) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(
+            modifier = Modifier.padding(18.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Text("Media compatibility probe", style = MaterialTheme.typography.titleLarge)
+            Text(
+                if (state.accessGranted) {
+                    "Notification Access enabled. AutoSleep can inspect media sessions Android exposes to enabled notification listeners."
+                } else {
+                    "Notification Access is required before AutoSleep can inspect active media sessions."
+                },
+            )
+
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                Button(onClick = onOpenAccess) {
+                    Text(if (state.accessGranted) "Media access settings" else "Enable media access")
+                }
+                Button(
+                    onClick = onRefresh,
+                    enabled = state.accessGranted,
+                ) {
+                    Text("Refresh")
+                }
+            }
+
+            Text(
+                "Visible sessions: ${state.sessions.size}",
+                style = MaterialTheme.typography.titleMedium,
+            )
+
+            if (state.accessGranted && state.sessions.isEmpty()) {
+                Text("No active media sessions are currently visible. Start playback in a test app and refresh.")
+            }
+
+            state.sessions.forEach { session ->
+                MediaSessionCard(session = session, onPause = onPause)
+            }
+
+            if (state.logs.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(4.dp))
+                Text("Compatibility log", style = MaterialTheme.typography.titleMedium)
+                state.logs.takeLast(10).reversed().forEach { line ->
+                    Text(line, style = MaterialTheme.typography.bodySmall)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun MediaSessionCard(
+    session: MediaSessionSnapshot,
+    onPause: (String) -> Unit,
+) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(
+            modifier = Modifier.padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(5.dp),
+        ) {
+            Text(session.packageName, style = MaterialTheme.typography.titleSmall)
+            Text("Playback: ${session.playbackState}")
+            session.title?.let { Text("Title: $it") }
+            session.artist?.let { Text("Artist: $it") }
+            session.durationMs?.let { duration ->
+                Text("Duration: ${duration / 1000}s")
+            }
+            Text("Pause advertised: ${if (session.pauseSupported) "yes" else "no"}")
+
+            Button(
+                onClick = { onPause(session.id) },
+                enabled = session.pauseSupported,
+            ) {
+                Text("Request pause")
+            }
         }
     }
 }
@@ -146,6 +276,23 @@ fun AutoSleepDashboard() {
 @Composable
 private fun DashboardPreview() {
     MaterialTheme {
-        AutoSleepDashboard()
+        AutoSleepDashboard(
+            mediaState = MediaMonitorState(
+                accessGranted = true,
+                sessions = listOf(
+                    MediaSessionSnapshot(
+                        id = "demo",
+                        packageName = "com.example.player",
+                        playbackState = "PLAYING",
+                        title = "Sample video",
+                        artist = "Example",
+                        durationMs = 600_000,
+                        pauseSupported = true,
+                        actions = 0L,
+                    ),
+                ),
+                logs = listOf("00:14:52  Manual refresh: 1 active session(s) visible."),
+            ),
+        )
     }
 }
